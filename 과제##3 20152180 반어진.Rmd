@@ -1,0 +1,404 @@
+---
+title: "과제 #3"
+author: "Ban Eu Jin"
+date:  "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document: 
+    highlight: pygments
+  pdf_document: default
+editor_options: 
+  chunk_output_type: console
+---
+```{r, echo=FALSE}
+knitr::opts_chunk$set(error = TRUE)
+
+```
+
+<br/>
+
+ClimateChange.csv 파일은 1983년 5월부터 2008년 12월까지의 지구의 평균적인 대기 질 및 기후 관련 데이터를 포함한다. 변수에 대한 상세한 설명을 아래와 같다. 이를 활용하여 세계의 평균 기온을 예측하기 위한 모델을 만들어 보고자 한다. Temp 변수를 target으로, Year 및 Month를 제외한 나머지 8개의 변수를 feature로 사용하자.
+
+<br/>
+• Year : 관측 년도
+
+• Month : 관측 월
+
+• Temp : 세계 평균 기온 (기준값 대비 차이)
+
+• CFC.11 : 대기 중 CFC-11 프레온가스 농도 (단위: ppbv)
+
+• CFC.12 : 대기 중 CFC-12 프레온가스 농도 (단위: ppbv)
+
+• CO2 : 대기 중 이산화탄소 농도 (단위: ppmv)
+
+• N2O : 대기 중 아산화질소 농도 (단위: ppmv)
+
+• CH4 : 대기 중 메탄 농도 (단위: ppmv)
+
+• Aerosols : The mean stratospheric aerosol optical depth - 성층권 에어로졸 깊이
+
+• TSI : The total solar irradiance - 대기 중 단위 면적당 태양에너지
+
+• MEI : Multivariate El Nino Southern Oscillation index - 태평양에서의 기후 효과의 강도에 대한 척도
+
+<br/>
+
+### 1. Year 및 Month를 제외한 9개의 변수들 간의 상관 관계를 다양한 그래프를 활용하여 시각화해보고, 이로부터 데이터의 특성을 분석해보자.
+<br/>
+
+
+
+```{r message=FALSE}
+library(ggplot2)
+library(caret)
+library(ISLR)
+library(rsample)
+library(PerformanceAnalytics)
+library(corrplot)
+library(leaps)
+library(glmnet)
+library(vip)
+```
+
+
+```{r warning=FALSE}
+getwd()
+climate=read.csv("ClimateChange.csv")
+str(climate)
+climate=climate[-1:-2] #Year ,Month제거
+cor(climate) 
+# 각각의 변수에 대한 상관관계 
+#-1.0과 -0.7 사이이면, 강한 음적 선형관계,
+#-0.7과 -0.3 사이이면, 뚜렷한 음적 선형관계,
+#-0.3과 -0.1 사이이면, 약한 음적 선형관계,
+#-0.1과 +0.1 사이이면, 거의 무시될 수 있는 선형관계,
+#+0.1과 +0.3 사이이면, 약한 양적 선형관계,
+#+0.3과 +0.7 사이이면, 뚜렷한 양적 선형관계,
+#+0.7과 +1.0 사이이면, 강한 양적 선형관계
+plot(climate) #상관관계 그래프
+pairs(climate,panel=panel.smooth) #추세선
+chart.Correlation(climate,histogram = T,pch=19)#히스토그램,상관관계 R값 , 추세선 *의 갯수가 많을 수록상관관계가 있다고 볼 수 있다. 
+# ***인 변수들은 (MEI,Aerosois),(CO2,CH4),(CO2,N2O),(CO2,CFC.11),(CO2,CFC.12),(CO2,Aerosois),(CO2,Temp) 등등이 있다.
+climate.cor=cor(climate)
+climate.cor
+corrplot(climate.cor,method="number") #상관관계를 숫자로 표현
+
+```
+<br/>
+target: Temp, feature: 나머지 8개 변수의 상관관계는 
+Aerosols : 음의 상관관계
+TSI, MEI: 무시 가능
+CFC.11, CFC.12, N20, CH4, CO2: 양의 상관관계
+위와 같은 특징을 가진다는 것을 확인할 수 있다.
+
+
+<br/>
+### 2. 2004년 이후의 데이터를 test set으로 2003년까지의 데이터를 training set으로 분할하자. 그리고
+training set을 활용하여 linear regression model을 수립하자. 이때 8개의 feature변수를 모두 포함
+시킨다.
+
+a) 어떠한 feature들이 Temp에 큰 영향을 미치는가?
+
+b) N2O와 CFC-11은 지구의 지표면에서 우주로 발산하는 적외선 복사열을 흡수하여 지구 표면의 온도를 상승시키는 역할을 하는 온실가스로 알려져 있다. 모델에서 N2O와 CFC-11 변수의 coefficient는 양수 값을 가지는가?음수 값을 가지는가? 만약 음수값을 가진다면 N2O와 CFC-11의 양이 증가할수록 평균 기온이 감소한다는 것을 의미하므로 일반적인 지식과 모순된다. 이러한 모순된 결과가 도출되는 원인은 무엇일까?
+
+<br/>
+```{r warning=FALSE}
+climate=read.csv("ClimateChange.csv")
+head(climate)
+str(climate)
+testset=climate[climate$Year>2003,]
+testset=testset[-1:-2] 
+
+trainingset=climate[climate$Year<2004,]
+trainingset=trainingset[-1:-2]
+
+#2004년 이후 test set , 2004년 이전 training set ,Year,Month 제거 , target = Temp
+#a) 어떠한 feature들이 Temp에 큰 영향을 미치는가?
+
+model1=lm(Temp~.,data=trainingset)
+model1_s=summary(model1)
+model1_s#CH4를 제외한 나머지 변수들이 영향을 미치나 CO2,N2O는 나머지 변수에 비해 영향이 적다고 볼 수 있다.
+vip(model1)#영향을 미치는 feature들을 중요도별로 보여준다.
+
+#b)
+
+
+
+```
+
+<br/>
+### 3. MEI, TSI, Aerosols, N2O 4개의 feature만 사용하여 regression model을 만들어 보자.
+
+a) N2O 변수의 coefficient를 2번 모델과 비교해 보자.
+
+b) 두 모델의 R^2 값, Adjusted R^2 값, test set error (test set에 대한 RMSE) 를 비교해 보자. 어떤 모델을 선택 하겠는가?
+<br/>
+```{r warning=FALSE}
+#training set을 이용하여 비교
+model1=lm(Temp~.,data=trainingset) #8개의 피쳐
+model2=lm(Temp~MEI+TSI+Aerosols+N2O,data=trainingset) #4개의 피쳐
+
+model2_s=summary(model2)
+model1_s
+# a)N2O 변수의 coefficient를 2번 모델과 비교
+model1$coefficients # 8개의 피쳐를 포함한 모델 1 N2o의 coef 값이 음수이다.
+model2$coefficients # 4개의 피쳐를 포함한 모델 2 N2o의 coef 값이 양수이다.
+
+# b) 두 모델의 R^2 비교
+model1_s$r.squared #target변수가 가지는 71.3%의 변동을 설명
+model2_s$r.squared #target변수가 가지는 68.0%의 변동을 설명
+# b) 두모델의 Adjusted R^2 비교 여전히 model1이 더 크다
+model1_s$adj.r.squared 
+model2_s$adj.r.squared
+# b) test set에 대한 RMSE 비교
+climate_test_pred_1= predict(model1,testset)
+climate_test_pred_2= predict(model2,testset)
+RMSE(climate_test_pred_1,testset$Temp)
+RMSE(climate_test_pred_2,testset$Temp)
+#model1이 RMSE값이 더 작다.
+
+```
+<br/>
+모델을 선택할 때 높은 R^2 값 , 높은 adjusted R^2 값 , 낮은 RMSE 값을 가지는 모델을 채택한다.
+두 모델 중 채택을 한다면 위의 조건에 만족하는 model1(8개의 피쳐)을 채택한다.
+
+<br/>
+
+### 4. 8개의 feature를 대상으로 cross validation을 활용한 stepwise variable selection을 수행해보자.
+
+a) Forward selection과 backward selection의 결과를 비교해보자.
+
+b) Prediction accuracy와 Model interpretability를 종합적으로 고려하여 best 모델을 하나 결정하자.
+<br/>
+```{r warning=FALSE}
+climate=climate[-1:-2]
+ #climate의 feature가 아닌 변수 제거
+#cross validation 을 활용한 best subset selection 알고리즘
+
+#a)
+forward_model=train(Temp~.,data=trainingset,method="leapForward",tuneGrid=data.frame(nvmax=1:8),
+                    trControl=trainControl(method="repeatedcv",number=10,repeats = 5))
+forward_model$results #feature 개수에 따른 RMSE값 RMSE가 낮은 feature의 개수일 수록 예측성능이 우수
+#해당 모델에서는 7개가 우수
+backward_model=train(Temp~.,data=trainingset,method="leapBackward",tuneGrid=data.frame(nvmax=1:8),
+                    trControl=trainControl(method="repeatedcv",number=10,repeats = 5))
+backward_model$results#forward와 같이 7개일 때 우수
+forward_model$bestTune
+backward_model$bestTune
+ggplot(forward_model$results,aes(x=nvmax,y=RMSE))+geom_point()+geom_line()+theme_bw() #forward 모델의 RMSE값 그래프 7개의 변수가 포함될 때가 가장 작다.
+ggplot(backward_model$results,aes(x=nvmax,y=RMSE))+geom_point()+geom_line()+theme_bw() #backward 모델의 RMSE값 그래프 7개의 변수가 포함될 때가 가장 작다.
+#forward의 모델 선택
+forward_model$finalModel
+coef_forward_cv=coef(forward_model$finalModel,7)
+coef_forward_cv
+test_pred_fwd=predict(forward_model,newdata=testset)
+test_pred_fwd
+forward_model
+RMSE(test_pred_fwd,testset$Temp) #이를 통해 7개의 feature가 무엇인지, 그리고 이를 포함했을 때 Temp에 대한 RMSE는 0.08336정도로 계산된다. 
+final_reg=regsubsets(Temp~.,data=climate,nvmax=8,method="forward")
+coef_final=coef(final_reg,7)
+coef_final #traing set 과 testset 모두를 포함하는 데이터셋에 대하여 nvmax=7을 적용하여 최종 모델을 만든다.
+#backward의 모델 선택
+coef_backward_cv=coef(backward_model$finalModel,7)
+coef_backward_cv
+test_pred_bwd=predict(backward_model,newdata=testset)
+RMSE(test_pred_bwd,testset$Temp) 
+#이를 통해 7개의 feature가 무엇인지, 그리고 이를 포함했을 때 Temp에 대한 RMSE는 0.08336정도로 계산된다. 이는 forward모델과 같다. 
+final_reg_bwd=regsubsets(Temp~.,data=climate,nvmax=8,method="backward")
+coef_final_bwd=coef(final_reg_bwd,7)
+coef_final_bwd #traing set 과 testset 모두를 포함하는 데이터셋에 대하여 nvmax=7을 적용하여 최종 모델을 만든다
+
+
+#b) best model selection
+
+coef_final
+coef_final_bwd
+trX=model.matrix(Temp~.,trainingset)[,-1]
+trY=trainingset$Temp
+lasso=cv.glmnet(trX, trY, alpha=1,ncv=10,nfolds=10)
+lasso
+plot(lasso) #training set feature가 5~8 일때
+best_lambda_lasso=lasso$lambda.min
+best_lambda_lasso
+testX=model.matrix(Temp~.,testset)[,-1]
+lasso_pred=predict(lasso,s=best_lambda_lasso,newx=testX)
+RMSE(lasso_pred,testset$Temp)
+
+fullX=model.matrix(Temp~.,climate)[,-1]
+fullY=climate$Temp
+lasso_full=cv.glmnet(fullX,fullY,alpha=1,ncv=10,nfolds=10)
+
+predict(lasso_full,s=best_lambda_lasso,type="coefficients")[1:9,]
+
+#정확도와 해석력을 고려하여 모델을 선택하더라도 CH4를 제외한 7개의 모델을 선택
+
+
+```
+
+
+<br/>
+### 5. Prediction accuracy를 높이기 위해, 기존 8개의 feature들 외에 feature들 사이의 모든 interaction
+effect, 그리고 CO2, CFC.11, CFC.12의 제곱항들을 모두 추가한 모델을 대상으로 cross validation을 활용한 stepwise variable selection을 수행해보자.
+
+a) Forward selection과 backward selection의 결과를 비교해보자.
+
+
+b) Cross validated RMSE가 가장 낮은 best 모델을 결정하자. 어떠한 변수들이 best 모델에 포함되는가?
+<br/>
+```{r warning= FALSE}
+
+inter_model=lm(Temp~(.)^2+I(CO2^2)+I(CFC.11^2)+I(CFC.12^2),data=trainingset)
+summary(inter_model)
+n_model=lm(Temp~.,data=trainingset)
+summary(n_model)
+#기존의 8개의 feature를 포함하는 모델에 비해 R^2값이 0.1가량 증가하였다.
+#a,b) cv forward + best model 
+fwd_model_int=train(Temp~(.)^2+I(CO2^2)+I(CFC.11^2)+I(CFC.12^2),data=trainingset,method="leapForward",
+                tuneGrid=data.frame(nvmax=1:39),trControl=trainControl(method="repeatedcv",number=10,repeats=5))
+
+fwd_model_int$results
+fwd_model_int$bestTune #14개의 feature가 포함될 때 RMSE가 가장작다.
+ggplot(fwd_model_int)
+
+coef_fwd_cv=coef(fwd_model_int$finalModel,14)
+coef_fwd_cv #포함될 변수들은 다음과 같다
+test_pred_fwd_int=predict(fwd_model_int,newdata=testset)
+RMSE(test_pred_fwd_int,testset$Temp) #RMSE는 다음과 같다.
+final_reg_int=regsubsets(Temp~(.)^2+I(CO2^2)+I(CFC.11^2)+I(CFC.12^2),data=climate,nvmax=39,method="forward")
+coef_final_int=coef(final_reg_int, 14)
+coef_final_int
+#마지막으로 전체 데이터셋에 대해 nvmax=14를 적용하여 최종모델을 만든다.
+interX=model.matrix(Temp~(.)^2+I(CO2^2)+I(CFC.11^2)+I(CFC.12^2),trainingset)[,-1]
+interY=trainingset$Temp
+lasso_inter=cv.glmnet(interX,interY,alpha=1,ncv=10,nfolds=10)
+plot(lasso_inter)
+# 피쳐의 개수가 24~32일 때 RMSE가 최소가 되므로 해석력과 정확도를 고려하여 forward cv의 결과인 14개의 피쳐를 사용하는 것이 좋다.
+
+#a,b) cv backward + best model 
+
+bwd_model_int=train(Temp~(.)^2+I(CO2^2)+I(CFC.11^2)+I(CFC.12^2),data=trainingset,method="leapBackward",
+                tuneGrid=data.frame(nvmax=1:39),trControl=trainControl(method="repeatedcv",number=10,repeats=5))
+
+bwd_model_int$results
+bwd_model_int$bestTune #backward의 경우 20개의 feature가 포함될 때 RMSE가 가장작다.
+ggplot(bwd_model_int)
+
+coef_bwd_int_cv=coef(bwd_model_int$finalModel,20)
+coef_bwd_int_cv #포함될 변수들은 다음과 같다
+
+test_pred_bwd_int=predict(bwd_model_int,newdata=testset)
+RMSE(test_pred_bwd_int,testset$Temp) #testset에 대하여 RMSE는 다음과 같다.
+final_reg_int_bwd=regsubsets(Temp~(.)^2+I(CO2^2)+I(CFC.11^2)+I(CFC.12^2),data=climate,nvmax=39,method="backward")
+coef_final_int_bwd=coef(final_reg_int_bwd,20)
+coef_final_int_bwd
+#마지막으로 전체 데이터셋에 대해 nvmax=20를 적용하여 최종모델을 만든다.
+
+#forward 의 경우 14개의 변수를 선택하고 RMSE가 0.0937이며 backward의 경우 20개의 변수를 선택하고 RMSE가 0.2465이다.
+#RMSE가 낮고 변수갯수가 적은 forward방식을 통하여 도출된 변수들을 포함시키면 될 것이다.
+
+```
+
+
+
+
+```{r warning=FALSE}
+#8개의 피쳐
+RMSE(climate_test_pred_1,testset$Temp)
+#4개의 피쳐
+RMSE(climate_test_pred_2,testset$Temp)
+#8개의 피쳐 forward cv
+RMSE(test_pred_fwd,testset$Temp)
+#8개의 피쳐 backward cv
+RMSE(test_pred_bwd,testset$Temp) 
+#interaction 과 제곱항을 포함한 피쳐 forward cv
+RMSE(test_pred_fwd_int,testset$Temp)
+#interaction 과 제곱항을 포함한 피쳐 backward cv
+RMSE(test_pred_bwd_int,testset$Temp)
+
+
+```
+<br/>
+대부분의 경우 test셋에 적용했을 경우 RMSE가 더 늘어나는 경향이 나타났다.
+이는 testset과 trainingset을 랜덤으로 나눈 것이 아니라 2004년을 기준으로 나누었기 때문에 나타다는 현상으로 보여진다.
+
+<br/>
+### 2. Regression on Simulated Data
+<br/>
+(i) rnorm() 함수를 활용해서 표준정규분포로부터 길이가 100인 feature vector 를 생성하고, 평균이 0,
+표준편차가 3인 정규분포로부터 길이가 100인 오차 vector 을 생성한다.
+(ii) 길이가 100인 target vector 를 다음 식을 사용하여 생성한다.
+Y = 1 + 2X + 3X2 + 4X3 + ϵ
+즉, 실제 regression coefficient β0 = 1 β1 = 2 β2 = 3 β3 = 4 과 같고, 이를 추정하기 위한 linear
+regression model을 아래의 순서대로 만들어보자.
+<br/>
+```{r warning=FALSE}
+set.seed(123)
+X=rnorm(100)
+E=rnorm(100,mean=0,sd=3)
+Y=1+2*X+3*X^2+4*X^3+E
+Y
+```
+
+<br/>
+### 1.X, X2, X3…, X10 의 10개 변수를 feature로, Y 를 target으로 설정하자. 이때 feature 변수들과 target 변수 사이의 상관관계를 시각화해보자.
+<br/>
+```{r warning=FALSE}
+mdata=cbind(Y,X,I(X^2),I(X^3),I(X^4),I(X^5),I(X^6),I(X^7),I(X^8),I(X^9),I(X^10))
+mdata_df=data.frame(mdata)
+mdata_df
+
+
+plot(mdata_df)
+chart.Correlation(mdata_df,histogram = T,pch=19)
+cor_data=cor(mdata_df)
+
+corrplot(cor_data,method="number") #상관관계를 숫자로 표현
+```
+
+<br/>
+### 2. 10개의 feature를 모두 포함하는 linear regression model을 만들어보자. 통계적으로 유의한 변수가
+있는가? regression coefficient 값을 실제 값과 비교해보자.
+<br/>
+```{r warning=FALSE}
+leg=lm(Y~X+I(X^2)+I(X^3)+I(X^4)+I(X^5)+I(X^6)+I(X^7)+I(X^8)+I(X^9)+I(X^10))
+summary(leg)
+#X^2 가 유의하다.
+#실제 X^2의 값은 3이고 regression coef 값은 9.52297이 나왔다.
+
+
+```
+
+<br/>
+### 3. X, X2, X3 의 3개 변수를 feature로,Y 를 target으로 linear regression model을 만들어보자. 모든feature들이 통계적으로 유의한가? regression coefficient 값을 실제 값과 비교해보자.
+
+```{r warning=FALSE}
+leg_1=lm(Y~X+I(X^2)+I(X^3),data=mdata_df)
+summary(leg_1)
+#모든 feature들이 유의하다
+#X는 0.9112 , X^2 는 1.7613 , X^3은 4.0613이 도출되었다.
+
+```
+<br/>
+### 4.X, X2, X3…, X10 의 10개 변수를 feature로, Y 를 target으로 Lasso regression model을 만들어
+본다. Cross validation으로 최적의 모델을 찾아보자. 이 모델에는 어떤 변수가 포함되었는가?
+regression coefficient 값을 실제 값과 비교해보자. 그리고 결과를 바탕으로 Lasso regression의 효
+과에 대해서 설명해보자.
+
+<br/>
+
+```{r warning=FALSE}
+
+x=model.matrix(Y~.,mdata_df)[,-1]
+y=mdata_df$Y
+cv.lasso=cv.glmnet(x,y,alpha=1,ncv=10,nfolds = 10) #기본 10 fold, ncv = 반복횟수 10 fold 5회반복 lasso
+summary(cv.lasso)
+plot(cv.lasso)
+best=cv.lasso$lambda.min
+
+predict(cv.lasso,s=best,type="coefficients")[1:11,]
+#lasso를 통하여 다음과 같은 coef값을 얻게 되었다. 상수 ,X,X^2,X^3,X^4,X^6 이 포함되었다
+#실제데이터와 상당히 유사하게 도출이 되었다. 이를통해 lasso regression은 실제데이터와 유사하게 도출하는 효과가 있다는 것을 생각해볼 수 있을 것이다.
+
+
+
+```
